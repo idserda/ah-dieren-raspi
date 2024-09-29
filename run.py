@@ -1,21 +1,25 @@
 import cv2
 import numpy as np
 
-def decode_custom_barcode(image):
+def save_image(image, step_name):
+    # Generate a unique filename
+    filename = f'{step_name}.jpg'
+    cv2.imwrite(filename, image)
+
+def detect_rectangles(image):
     # Convert the image to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Apply binary thresholding to get a black and white image (invert colors)
-    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)  # Invert for dark bars on white
+    # Apply binary thresholding to get a binary image
+    _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
+    save_image(thresh, "9_thresh")
 
-    # Find contours of the black areas
+    # Find contours in the binary image
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Initialize variable to store the best rectangle
-    barcode_rect = None
-    barcode_area = None
+    horizontal_rectangles = []
+    heights = []
 
-    # Loop through the contours to find the rectangle for the barcode
     for contour in contours:
         # Approximate the contour to a polygon
         epsilon = 0.02 * cv2.arcLength(contour, True)
@@ -23,82 +27,89 @@ def decode_custom_barcode(image):
 
         # Check if the approximated contour has four points (rectangle)
         if len(approx) == 4:
-            # Calculate the area of the contour
-            area = cv2.contourArea(contour)
-            if area > 1000:  # Filter out small areas; adjust as necessary
-                barcode_rect = approx
-                # Create a mask for the barcode area
-                mask = np.zeros_like(gray)
-                cv2.drawContours(mask, [barcode_rect], -1, (255), thickness=cv2.FILLED)
-                # Bitwise AND to extract the barcode area
-                barcode_area = cv2.bitwise_and(image, image, mask=mask)
+            # Get the bounding box
+            x, y, w, h = cv2.boundingRect(approx)
 
-                # Crop the barcode area using the bounding box
-                x, y, w, h = cv2.boundingRect(barcode_rect)
-                barcode_cropped = barcode_area[y:y+h, x:x+w]
+            aspect_ratio = w / float(h)
 
-                # Decode the cropped barcode region
-                return decode_bars(barcode_cropped)
+            # Filter for horizontal rectangles (w should be greater than h)
+            if aspect_ratio > 4 and w > 100 and w > h:  # Adjust the condition if necessary for your definition of "horizontal"
+                heights.append(h)
 
-    return None
+                horizontal_rectangles.append(approx)  # Store the rectangle points
+
+                # Draw the rectangle on the image
+                cv2.drawContours(image, [approx], -1, (0, 255, 0), 2)  # Green rectangles
+
+    save_image(image, "10_rect")
+
+    res = ''
+    median_value = np.median(heights)
+    print(f"Median: {median_value}, height: {heights}")
+    for height in heights:
+        if height > median_value:
+            res = res + '1'
+        else:
+            res = res + '0'
+    return res
 
 def decode_bars(image):
-    # Convert cropped image to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return detect_rectangles(image)
+
+def validate(s):
+    # Check length
+    if len(s) != 13:
+        print(f"Incorrect lenght")
+        return False
     
-    # Apply binary thresholding to get a black and white image
-    _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV)
+    # Check first three characters
+    if not s.startswith('000'):
+        print(f"No 3 leading zeros")
+        return False
+    
+    # Include the first three bits in the XOR calculation
+    xor_result = 0
+    for bit in s[:10]:  # Calculate XOR for bits 1 to 10 (indexes 0 to 9)
+        xor_result ^= int(bit)
+    
+    # Check if the XOR result matches bit 11 (index 10)
+    if int(s[10]) != xor_result:
+        print(f"Incorrect bit 11 xor")
+        return False
+    
+    # Validate that bit 12 (index 11) is the inverse of bit 11
+    if int(s[11]) != (1 - xor_result):
+        print(f"Incorrect bit 12 inv xor")
+        return False
 
-    # Sum along the height to detect vertical bars
-    vertical_sum = np.sum(thresh == 255, axis=0)
+    if (int(s[12])) != 1:
+        print(f"Incorrect bit 13 one")
+        return False
+    
+    return True
 
-    # Detect changes in the vertical sum to identify edges
-    bar_positions = []
-    previous_value = vertical_sum[0]
-    for i in range(1, len(vertical_sum)):
-        if vertical_sum[i] != previous_value:  # Edge detected
-            bar_positions.append(i)
-        previous_value = vertical_sum[i]
+def todec(s):
+    res = s[3:10]
+    return int(res, 2)
 
-    # Ensure we have 14 positions (start of each bar and the end of the last)
-    if len(bar_positions) != 14:
-        print(f"Error: Expected 14 edges but found {len(bar_positions)}")
-        return None
+# Run the process on the camera feed
+camera = cv2.VideoCapture(0)  # Adjust to your camera index if necessary
 
-    # Calculate the widths of the 13 bars
-    bar_widths = [bar_positions[i] - bar_positions[i - 1] for i in range(1, len(bar_positions))]
-
-    # Classify each bar as '0' (small) or '1' (wide)
-    barcode_data = ""
-    for width in bar_widths:
-        if width >= 2:  # Wide bar (1), adjust threshold based on your image resolution
-            barcode_data += "1"
-        else:  # Small bar (0)
-            barcode_data += "0"
-
-    return barcode_data
-
-# Open camera
-camera = cv2.VideoCapture(0)
-
-frame_count = 0
 while True:
     ret, frame = camera.read()
     if not ret:
         break
 
-    # Decode the barcode from the detected rectangle
-    decoded_barcode = decode_custom_barcode(frame)
+    save_image(frame, "0_captured")
+
+    # Decode the barcode from the image
+    decoded_barcode = decode_bars(frame)
+    print(f"Decoded: {decoded_barcode}")
     if decoded_barcode:
-        print(f"Frame {frame_count}: Decoded barcode: {decoded_barcode}")
+        if (validate(decoded_barcode)):
+            print(f"Decoded barcode: {decoded_barcode}")
+            print(f">> {todec(decoded_barcode)} >>")
     else:
-        print(f"Frame {frame_count}: No valid barcode detected")
-
-    # Print a log statement for every frame
-    frame_count += 1
-
-    # Exit on 'q' key press
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        print("No valid barcode detected.")
 
 camera.release()
