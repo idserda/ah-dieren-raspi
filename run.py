@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import time
+import os
 
 def save_image(image, step_name):
     # Generate a unique filename
@@ -45,7 +47,7 @@ def detect_rectangles(image):
 
     res = ''
     median_value = np.median(heights)
-    print(f"Median: {median_value}, height: {heights}")
+    #print(f"Median: {median_value}, height: {heights}")
     for height in heights:
         if height > median_value:
             res = res + '1'
@@ -92,6 +94,13 @@ def todec(s):
     res = s[3:10]
     return int(res, 2)
 
+def play_file(f):
+    if len(f) == 1:
+        f = f"0{f}"
+
+    audio_file = f"audio/{f}_Z0.wav"
+    os.system(f'aplay {audio_file}')
+
 # Run the process on the camera feed
 camera = cv2.VideoCapture(0)  # Adjust to your camera index if necessary
 
@@ -108,7 +117,9 @@ while True:
     if decoded_barcode:
         if (validate(decoded_barcode)):
             print(f"Decoded barcode: {decoded_barcode}")
-            print(f">> {todec(decoded_barcode)} >>")
+            dec = todec(decoded_barcode)
+            play_file(str(dec))
+
     else:
         print("No valid barcode detected.")
 
